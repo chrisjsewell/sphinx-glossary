@@ -20,7 +20,7 @@ requires-python = ">=3.7"
 Home = "https://github.com/chrisjsewell/sphinx-glossary"
 
 [project.optional-dependencies]
-develop = ["black", "sphinx>=3,<5", "pytest", "pytest-param-files"]
+develop = ["black", "sphinx>=3,<5", "pytest", "pytest-param-files", "pytest-cov"]
 docs = ["sphinx>=3,<5", "myst-parser", "furo"]
 
 [tool.isort]

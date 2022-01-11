@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from docutils import nodes
 from docutils.parsers.rst.states import Inliner
-from docutils.transforms import Transform
 from docutils.utils import unescape
 
 if TYPE_CHECKING:
@@ -29,6 +28,97 @@ class GlsRole:
 
     name: str = "gls"
     """The role name to register."""
+
+    @property
+    def document(self) -> nodes.document:
+        """Get the sphinx environment."""
+        return self.inliner.document
+
+    @property
+    def sphinx_env(self) -> Optional["BuildEnvironment"]:
+        """Get the sphinx environment."""
+        try:
+            return self.document.settings.env
+        except AttributeError:
+            return None
+
+    def get_source_info(self) -> Tuple[str, int]:
+        return self.inliner.reporter.get_source_and_line(self.lineno)  # type: ignore
+
+    def set_source_info(self, node: nodes.Node) -> None:
+        node.source, node.line = self.get_source_info()
+
+    def create_warning(
+        self, text: str, subtype: str
+    ) -> Tuple[nodes.problematic, nodes.system_message]:
+        """Create a warning node.
+
+        :param msg: The message to use.
+        """
+        # TODO handle sphinx warning suppression
+        wtype = "gls"
+        msg = self.inliner.reporter.error(
+            f"{text} [{wtype}.{subtype}]", line=self.lineno
+        )
+        prb = self.inliner.problematic(self.rawtext, self.rawtext, msg)
+        return prb, msg
+
+    @staticmethod
+    def sanitize_key(key: str) -> str:
+        """Sanitize the key.
+
+        :param key: The key to sanitize.
+        """
+        return re.subn(r"[^a-zA-Z0-9_]", "_", str(key))[0]
+
+    def get_references(self) -> Dict[str, Dict[str, Any]]:
+        """Gather all glossary sources"""
+        # TODO cache, we want to get from config/top-matter, directly/via file
+        references: Dict[str, Dict[str, Any]] = {}
+        if self.sphinx_env:
+            global_references = self.sphinx_env.config.gls_references
+        else:
+            global_references = getattr(self.document.settings, "gls_references", {})
+
+        for key, data in (global_references or {}).items():
+            assert isinstance(
+                data, dict
+            ), f"gls_references values must be dict, got: {key!r}: {data!r}"
+            key = self.sanitize_key(key)
+            references[key] = {"source": "__config__", "data": data}
+
+        return references
+
+    def generate_nodes(
+        self, key: str, format_string: str, data: dict
+    ) -> Tuple[List[nodes.Node], List[nodes.system_message]]:
+        """Generate nodes."""
+        # TODO document reserved keys
+        kwargs = {**data["data"], **{"key_": key, "source_": data["source"]}}
+        return GlsFormatter(self).format(format_string, **kwargs)
+
+    def nested_parse(
+        self, text: str
+    ) -> Tuple[List[nodes.Node], List[nodes.system_message]]:
+        """Parse text."""
+        # TODO this is not yet directly supported in myst-parser (will be in v0.17)
+        if hasattr(self.inliner, "_renderer"):
+            renderer = self.inliner._renderer
+            container = nodes.Element()
+            with renderer.current_node_context(container):
+                tokens = renderer.md.parseInline(text, renderer.md_env)
+                for token in tokens:
+                    if token.map:
+                        token.map = [
+                            token.map[0] + self.lineno,
+                            token.map[1] + self.lineno,
+                        ]
+                renderer._render_tokens(tokens)
+
+            return container.children, []
+
+        # we are actually just parsing back to the inliner what it gave us
+        return self.inliner.parse(text, self.lineno, self.inliner, self.inliner.parent)
 
     def __call__(
         self,
@@ -52,134 +142,103 @@ class GlsRole:
         :param content: A list of strings, the directive content for customization
                         (from the "role" directive).
         """
-        text = unescape(text)
+        # set variables
+        self.rawtext = rawtext
+        self.lineno = lineno
+        self.inliner = inliner
+
         # evaluate the text
+        text = unescape(text)
         terms_format = text.split(" ", 1)
-        # create a placeholder, for later substitution
-        placeholder = nodes.inline(text, terms_format[0])
-        placeholder[self.name] = True
-        placeholder["keys"] = terms_format[0].split(",")
-        placeholder["format"] = terms_format[1] if len(terms_format) > 1 else ""
-        # TODO literal_eval?
-        placeholder.source, placeholder.line = inliner.reporter.get_source_and_line(
-            lineno
-        )
-        return [placeholder], []
+        keys = terms_format[0].split(",")
+        fmt_string = (
+            terms_format[1] if len(terms_format) > 1 else "{key_}"
+        )  # TODO get default from config
+        # TODO literal_eval (to remove '' or "")?
 
+        references = self.get_references()
 
-class ReferenceResolver(Transform):
-    """Docutils transform for resolving references."""
-
-    default_priority = 100  # TODO check this
-
-    @property
-    def sphinx_env(self) -> Optional["BuildEnvironment"]:
-        """Get the sphinx environment."""
-        return self.document.settings.env
-
-    def sanitize_key(self, key: str) -> str:
-        """Sanitize the key.
-
-        :param key: The key to sanitize.
-        """
-        return re.subn(r"[^a-zA-Z0-9_]", "_", str(key))[0]
-
-    def create_warning(
-        self, msg: str, base_node: nodes.Node, subtype: str
-    ) -> nodes.system_message:
-        """Create a warning node.
-
-        :param msg: The message to use.
-        """
-        # TODO sphinx handle suppression
-        wtype = "gls"
-        msg = f"{msg} [{wtype}.{subtype}]"
-        return self.document.reporter.error(msg, base_node=base_node)
-
-    def apply(self, **kwargs):
-        """Apply the transform."""
-        # gather all glossary sources
-        references = {}
-        if self.sphinx_env:
-            for key, data in (self.sphinx_env.config.gls_references or {}).items():
-                assert isinstance(
-                    data, dict
-                ), f"gls_references values must be dict, got: {key!r}: {data!r}"
-                key = self.sanitize_key(key)
-                references[key] = {"source": "__global__", "data": data}
-
-        # iterate through all the glossary references
-        # in docutils v0.18 traverse is deprecated for findall
-        iterator = getattr(self.document, "findall", self.document.traverse)
-        for node in list(iterator(nodes.inline)):
-            if GlsRole.name not in node.attributes:
-                continue
-            new_nodes = []
-            for key in node["keys"]:
-                if key not in references:
-                    new_nodes.extend(
-                        [self.create_warning(f"Unknown reference: {key}", node, "ref")]
-                    )
-                else:
-                    new_nodes.extend(self.generate_nodes(key, node, references[key]))
-            if new_nodes:
-                node.replace_self(new_nodes)
+        new_nodes = []
+        messages = []
+        for key in keys:
+            key = self.sanitize_key(key)
+            if key not in references:
+                prb, msg = self.create_warning(
+                    f"{key!r} key not found in glossary", "not_found"
+                )
+                new_nodes.append(prb)
+                messages.append(msg)
             else:
-                node.parent.remove(node)
+                inline = nodes.inline(
+                    key, gls_key=key, gls_source=references[key]["source"]
+                )
+                result, msgs = self.generate_nodes(key, fmt_string, references[key])
+                inline.extend(result)
+                new_nodes.append(inline)
+                messages.extend(msgs)
 
-    def generate_nodes(
-        self, key: str, node: nodes.inline, data: dict
-    ) -> List[nodes.Node]:
-        """Generate nodes."""
-        # TODO document reserved keys
-        kwargs = {**data["data"], **{"key_": key, "source_": data["source"]}}
-        format_string = node["format"] or "{key_}"  # TODO get default from config
-        return RefFormatter(self.document, node).format(format_string, **kwargs)
+        for node in new_nodes:
+            self.set_source_info(node)
+            for child in node.children:
+                self.set_source_info(child)
+
+        return new_nodes, messages
 
 
-class RefFormatter(Formatter):
+class GlsFormatter(Formatter):
     """Convert a format string to a list of docutils nodes.
 
     See: https://docs.python.org/3/library/string.html
     """
 
-    def __init__(self, document: nodes.document, node: nodes.Node) -> None:
+    def __init__(self, role: GlsRole, warn_missing: bool = True) -> None:
         """Initialize the formatter."""
         super().__init__()
-        self.document = document
-        self.node = node
+        self.warn_missing = warn_missing
+        self.role = role
 
-    def format(self, format_string: str, **kwargs) -> List[nodes.Node]:
+    def format(
+        self, format_string: str, **kwargs
+    ) -> Tuple[List[nodes.Node], List[nodes.system_message]]:
         """Format the format string.
 
         :param format_string: The format string to format.
         """
         result: List[nodes.Node] = []
-        # TODO handle parse failure
-        for literal_text, field_name, format_spec, conversion in self.parse(
-            format_string
-        ):
-            # output the literal text
-            if literal_text:
-                result.append(nodes.Text(literal_text, literal_text))
-            # if there's a field, output it
-            if field_name is not None:
-                if field_name in kwargs:
-                    result.extend(
-                        self.convert_field(kwargs[field_name], conversion, format_spec)
-                    )
-                else:
-                    # TODO sphinx handle suppression
-                    msg = f"Unknown field {field_name!r} [gls.format]"
-                    result.append(
-                        self.document.reporter.error(msg, base_node=self.node)
-                    )
+        messages: List[nodes.system_message] = []
+        try:
+            for literal_text, field_name, format_spec, conversion in self.parse(
+                format_string
+            ):
+                # output the literal text
+                if literal_text:
+                    result.append(nodes.Text(literal_text, literal_text))
+                # if there's a field, output it
+                if field_name is not None:
+                    if field_name in kwargs:
+                        output, msgs = self.convert_field(
+                            kwargs[field_name], conversion, format_spec
+                        )
+                        result.extend(output)
+                        messages.extend(msgs)
+                    elif self.warn_missing:
+                        prb, msg = self.role.create_warning(
+                            f"Unknown format field {field_name!r}", "format"
+                        )
+                        result.append(prb)
+                        messages.append(msg)
+        except Exception as exc:
+            prb, msg = self.role.create_warning(
+                f"Error while parsing format string: {exc}", "format"
+            )
+            result.append(prb)
+            messages.append(msg)
 
-        return result
+        return result, messages
 
     def convert_field(
         self, value: Any, conversion: Optional[str], format_spec: Optional[str]
-    ) -> List[nodes.Node]:
+    ) -> Tuple[List[nodes.Node], List[nodes.system_message]]:
         """Convert a field, with an optional conversion and format_spec.
 
         For example `{key:=1!s}` will convert the value of key to a string and
@@ -188,24 +247,49 @@ class RefFormatter(Formatter):
         :param format_spec: The format specifier (character after :).
         :param conversion: The conversion to use (character after !).
         """
-        if conversion == "s":
-            text = str(value)
-            return [nodes.Text(str(value), str(value))]
+        # standard conversions
+        obj = _UNSET
+        if conversion is None:
+            obj = value
+        elif conversion == "s":
+            obj = str(value)
         elif conversion == "r":
-            text = repr(value)
-        else:
-            text = str(value)
-        return [nodes.Text(text, text)]
+            obj = repr(value)
+        elif conversion == "f":
+            obj = float(value)
+        elif conversion == "i":
+            obj = int(value)
+        elif conversion == "a":
+            obj = ascii(value)
+        if obj is not _UNSET:
+            text = format(obj, format_spec)
+            return [nodes.Text(text, text)], []
 
-        # elif conversion == "a":
-        #     return ascii(value)
-        # elif conversion == "f":
-        #     return float(value)
-        # elif conversion == "i":
-        #     return int(value)
-        # elif conversion == "p":
-        #     return pprint.pformat(value)
-        # elif conversion == "c":
-        #     return pprint.pformat(value, width=40)
-        # else:
-        #     raise ValueError(f"Unknown conversion {conversion!r}")
+        # special docutils conversions
+        if conversion == "p":
+            return self.role.nested_parse(str(value))
+        if conversion == "s":
+            node = nodes.strong()
+            node.append(nodes.Text(str(value), str(value)))
+            return [node], []
+        if conversion == "e":
+            node = nodes.emphasis()
+            node.append(nodes.Text(str(value), str(value)))
+            return [node], []
+        if conversion == "u":
+            node = nodes.superscript()
+            node.append(nodes.Text(str(value), str(value)))
+            return [node], []
+        if conversion == "l":
+            node = nodes.subscript()
+            node.append(nodes.Text(str(value), str(value)))
+            return [node], []
+
+        prb, msg = self.role.create_warning(
+            f"Unknown conversion format {conversion!r}", "format"
+        )
+        return [prb], [msg]
+
+
+class _UNSET:
+    """A sentinel value for unset values."""

@@ -20,17 +20,25 @@ def setup_docutils():
 PATH = Path(__file__).parent / "fixtures"
 
 
-@pytest.mark.param_file(PATH.joinpath("docutils.txt"), fmt="dot")
-def test_role(setup_docutils, file_params):
-    """Test the parsing the role."""
+@pytest.mark.param_file(PATH.joinpath("docutils_gls_role.txt"), fmt="dot")
+def test_role_rst(setup_docutils, file_params):
+    """Test the parsing the role with the RSTParser."""
     warning_stream = StringIO()
     string = publish_string(
         file_params.content,
+        parser_name="restructuredtext",
         writer_name="pseudoxml",
         settings_overrides={
             "warning_stream": warning_stream,
             "output_encoding": "unicode",
+            "gls_references": {
+                "term1": {"name": "a", "value": 1.2345},
+                "term2": {"name": "b", "value": 1.2345},
+                "term3": {"name": "c", "value": 1.2345},
+            },
         },
     )
-    assert warning_stream.getvalue().strip() == ""
-    file_params.assert_expected(string, rstrip_lines=True)
+    warnings = warning_stream.getvalue().strip()
+    if warnings:
+        warnings += "\n"
+    file_params.assert_expected(warnings + string, rstrip_lines=True)

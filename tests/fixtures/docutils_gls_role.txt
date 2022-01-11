@@ -1,0 +1,100 @@
+[basic]
+.
+:gls:`term1` :gls:`term1,term2` :gls:`term1,term2,term3 {name}`
+.
+<document source="<string>">
+    <paragraph>
+        <inline gls_key="term1" gls_source="__config__">
+            term1
+
+        <inline gls_key="term1" gls_source="__config__">
+            term1
+        <inline gls_key="term2" gls_source="__config__">
+            term2
+
+        <inline gls_key="term1" gls_source="__config__">
+            a
+        <inline gls_key="term2" gls_source="__config__">
+            b
+        <inline gls_key="term3" gls_source="__config__">
+            c
+.
+
+[missing]
+.
+:gls:`missing`
+.
+<string>:1: (ERROR/3) 'missing' key not found in glossary [gls.not_found]
+<document source="<string>">
+    <paragraph>
+        <problematic ids="id2" refid="id1">
+            :gls:`missing`
+    <system_message backrefs="id2" ids="id1" level="3" line="1" source="<string>" type="ERROR">
+        <paragraph>
+            'missing' key not found in glossary [gls.not_found]
+.
+
+[unknown_format_key]
+.
+:gls:`term1 {unknown}`
+.
+<string>:1: (ERROR/3) Unknown format field 'unknown' [gls.format]
+<document source="<string>">
+    <paragraph>
+        <inline gls_key="term1" gls_source="__config__">
+            <problematic ids="id2" refid="id1">
+                :gls:`term1 {unknown}`
+    <system_message backrefs="id2" ids="id1" level="3" line="1" source="<string>" type="ERROR">
+        <paragraph>
+            Unknown format field 'unknown' [gls.format]
+.
+
+[unknown_conversion]
+.
+:gls:`term1 {name!x}`
+.
+<string>:1: (ERROR/3) Unknown conversion format 'x' [gls.format]
+<document source="<string>">
+    <paragraph>
+        <inline gls_key="term1" gls_source="__config__">
+            <problematic ids="id2" refid="id1">
+                :gls:`term1 {name!x}`
+    <system_message backrefs="id2" ids="id1" level="3" line="1" source="<string>" type="ERROR">
+        <paragraph>
+            Unknown conversion format 'x' [gls.format]
+.
+
+[formats]
+.
+:gls:`term1 {name!p} {name!s} {name!e} {value!i} {value:f} {name!u} {name!l}`
+.
+<document source="<string>">
+    <paragraph>
+        <inline gls_key="term1" gls_source="__config__">
+            a
+
+            a
+
+            <emphasis>
+                a
+
+            1
+
+            1.234500
+
+            <superscript>
+                a
+
+            <subscript>
+                a
+.
+
+[decimal]
+.
+:gls:`term1 {value:.2f}`
+.
+<document source="<string>">
+    <paragraph>
+        <inline gls_key="term1" gls_source="__config__">
+            1.23
+.
