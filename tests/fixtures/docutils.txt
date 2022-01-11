@@ -1,0 +1,15 @@
+[basic]
+.
+:gls:`foo` :gls:`foo,bar` :gls:`term1,term2,term3 format string`
+.
+<document source="<string>">
+    <paragraph>
+        <inline gls="True" refs="foo">
+            foo
+
+        <inline gls="True" refs="foo bar">
+            foo,bar
+
+        <inline format="format string" gls="True" refs="term1 term2 term3">
+            term1,term2,term3
+.
